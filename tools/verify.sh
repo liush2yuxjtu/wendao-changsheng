@@ -172,7 +172,7 @@ echo "$sha" > "$tmp/version.txt"   # 线上验证用：确认 CDN 上是这次�
       -c user.email="$(git -C "$ROOT" config user.email || echo verify@localhost)" \
       commit -qm "deploy: $sha（tools/verify.sh --deploy）"
   git push -qf "$remote" gh-pages
-)
+) || die "推送 gh-pages 失败（见上方 git 输出；网络问题时检查代理，例如 export https_proxy=...）"
 rm -rf "$tmp"
 ok "已推送 gh-pages（源码 $sha）"
 
