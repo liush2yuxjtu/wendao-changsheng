@@ -3,6 +3,7 @@ extends Node
 
 const GameData := preload("res://scripts/game_data.gd")
 const Combat := preload("res://scripts/combat.gd")
+const InkDraw := preload("res://scripts/ink_draw.gd")
 
 signal changed
 signal logged(line: String)
@@ -401,6 +402,7 @@ func adventure(boss: bool, show := false) -> void:
 	var rec := Combat.fight(fighter(), GameData.monster(r, mlv, idx, boss, mname), rng)
 	var place: String = GameData.ZONES[r]
 	rec["title"] = "%s · %s" % [place, mname]
+	_battle_meta(rec, "boss" if boss else "plain", "%s · %s期" % [place, GameData.REALMS[r]])
 	var rounds: int = rec["rounds"]
 	if rec["win"]:
 		var ls := 25.0 * pow(2.2, r) * rng.randf_range(0.8, 1.2) * (4.0 if boss else 1.0) * rebirth_mult() * (1.2 if sect == "sword" else 1.0)
@@ -441,13 +443,23 @@ func adventure(boss: bool, show := false) -> void:
 	changed.emit()
 
 
+## 回放界面要用的附加信息：双方头像、敌方身份框、副标题
+func _battle_meta(rec: Dictionary, foe_rank: String, where: String) -> void:
+	rec["who"] = [sect if sect in ["sword", "pill", "mystic"] else "sword", InkDraw.foe_who(rec["names"][1])]
+	rec["rank"] = foe_rank
+	var sect_name: String = GameData.sect_by_id(sect).get("name", "散修")
+	rec["subs"] = ["%s · %s · 速 %d" % [realm_name(), sect_name, int(rec["spd"][0])], "%s · 速 %d" % [where, int(rec["spd"][1])]]
+
+
 # ---------------- 镇妖塔 ----------------
 func tower_challenge() -> void:
 	if adventure_cd > 0.0:
 		return
 	var fl := tower_floor + 1
-	var rec := Combat.fight(fighter(), GameData.tower_monster(fl), rng)
+	var tm := GameData.tower_monster(fl)
+	var rec := Combat.fight(fighter(), tm, rng)
 	rec["title"] = "镇妖塔 · 第%d层" % fl
+	_battle_meta(rec, "boss" if tm["boss"] else "elite", "镇妖塔第%d层" % fl)
 	if rec["win"]:
 		tower_floor = fl
 		var ls := GameData.tower_reward(fl) * rebirth_mult()
