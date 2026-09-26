@@ -41,13 +41,15 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 
 这一节是实际做过一遍后的经验。你（agent）经常不在装好环境的本机上，而是在云端沙箱或远程 shell 里。先判断自己在哪，再按对应做法来。
 
+分工：这里只写本项目特有的做法；跨项目通用的经验（云端沙箱提交、远程 shell 用法、macOS bash 3.2、安全清理等）在 work skill（liush2yuxjtu/work）的 `references/surfaces.md`，决策和价值观在它的 `decisions/log.jsonl`（本次为 D-048–D-054）。别因为当前环境做不到，就把事情交给用户，先把能连上的机器都试一遍（work 规则 R-021）。
+
 ### 先弄清三件事
 
 | 要确认的 | 怎么查 | 决定了什么 |
 |---|---|---|
 | 能不能 `git push` | `git push --dry-run origin HEAD:main` | 能 → 正常提交推送；不能 → 走下面的「云端沙箱」做法，用 GitHub 工具提交 |
 | 能不能跑 Godot | `bash tools/verify.sh --fast` | 能 → 本机验证；不能 → 找能跑的机器（下面的「远程 shell」） |
-| 当前 Pages 来源 | 看 `version.txt` 是否存在：`curl -fsS https://liush2yuxjtu.github.io/wendao-changsheng/version.txt` | 404 说明还没从 `gh-pages` 发布过，`--deploy` 前要让用户切 Pages 来源 |
+| 当前 Pages 来源 | 看 `version.txt` 是否存在：`curl -fsS https://liush2yuxjtu.github.io/wendao-changsheng/version.txt` | 能读到 commit 号说明 `gh-pages` 发布链路正常（2026-09-26 起就是这样）；404 才需要按下面的「发布顺序」处理 |
 
 ### 云端沙箱（有 Godot，但不能 git push）
 
@@ -66,13 +68,14 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 - **把云端改动搬到远程**：`git diff --binary | gzip -9 | base64` 放进命令参数，在远程 `base64 -d | gunzip | git apply`，然后用 `git hash-object` 比对 SHA。
 - **可执行位只能在这里补**：`chmod +x …` 加 `git update-index --chmod=+x …`，然后提交。
 - **浏览器**：Mac 上可以直接用 `CHROMIUM_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`，Playwright 用 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i --prefix ~/.cache/wendao-changsheng playwright` 装，不下浏览器。
-- **网络**：国内网络直连 github.com 可能超时，用户靠本机代理（Clash 等）上网。**不要**自己去读、设置或接管用户的代理（改脚本也不行），这会被安全策略拦下，也不该由 agent 决定。直接告诉用户，由他自己 `export https_proxy=…` 再跑，或者明确授权你这样做。
+- **网络**：国内网络直连 github.com 可能超时，用户靠本机代理（Clash 等）上网。**不要**自己去读、设置或接管用户的代理（改脚本也不行），这会被安全策略拦下，也不该由 agent 决定。直接告诉用户，由他自己 `export https_proxy=…` 再跑，或者明确授权你这样做。本项目在 Mac mini 上已获授权（work D-052）：跑本项目命令前在**那次命令里** `export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 no_proxy=localhost,127.0.0.1`；仍然不要写进脚本或 shell 配置，也不要用到别的项目（work R-023）。
 
-### 发布顺序（第一次从 CI 切到 gh-pages 时）
+### 发布顺序（第一次从 CI 切到 gh-pages 时；2026-09-26 已完成，留作参考）
 
 1. 本机或远程跑通 `bash tools/verify.sh`。
 2. 跑 `bash tools/verify.sh --deploy`，推出 `gh-pages` 分支。第 7 步会等线上版本号，这时来源还没切，会超时，属正常。
-3. 用户在 **Settings → Pages** 把来源切到 `gh-pages` / `/ (root)`。一定要在第 2 步之后切，否则网站会空白。
+3. 把 Pages 来源切到 `gh-pages` / `/ (root)`，一定要在第 2 步之后切，否则网站会空白。有已登录 `gh` 的机器（Mac mini）时由 agent 自己切：
+   `gh api -X PUT repos/liush2yuxjtu/wendao-changsheng/pages -f build_type=legacy -f 'source[branch]=gh-pages' -f 'source[path]=/'`，再用 `gh api repos/liush2yuxjtu/wendao-changsheng/pages --jq .source` 回读确认。只改设置不一定会触发构建，所以要走第 4 步。
 4. 再跑一次 `--deploy`，线上版本号等于当前 commit、线上冒烟通过才算发布完成。
 
 ### 改了验证本身时，要证明它能失败
@@ -90,6 +93,16 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 - 慢网速（比如 Mac 经代理）下，Emscripten 会在 wasm 还没下完时用 console.error 打印 `still waiting on run dependencies`。这是等待提示，`smoke_web.cjs` 已经把它列入白名单；真正加载不出来会被 90 秒超时抓到。拿不准时，在网速正常的机器上对线上地址再跑一次 `node tools/smoke_web.cjs <url>`。
 - 数值模拟有随机性（佛系玩法跑出过 4.9–8.1 小时）。只在接近区间边界时失败，重跑一次再下结论。
 
+## 现有环境（2026-09-26）
+
+| 地方 | 状态 | 怎么用 |
+|---|---|---|
+| GitHub Pages | 来源 `gh-pages` / `/`，线上 `version.txt` 可读 | 发布只走 `bash tools/verify.sh --deploy` |
+| Mac mini（executor-sh「Mac mini Shell」） | 副本 `~/projects/wendao-changsheng`，已开启 `core.hooksPath`；Godot 在 `~/.cache/wendao-changsheng/Godot.app`，Playwright 在同目录 `node_modules`，模板已下载；`gh` 已登录；系统 bash 3.2；磁盘余量紧（约 2.5GB） | `CHROMIUM_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`，再加上面的代理 export；长任务用 `nohup … & disown` |
+| 云端沙箱 | 不能 git push 本仓库；Chromium `/opt/pw-browsers/chromium` | 用 GitHub MCP 提交并比对 SHA；线上冒烟有疑问时在这里用正常网速复测 |
+
+Mac 副本里还留着 `backup-a69256a` 分支和一个 stash，都是本次对齐前的旧状态，内容已全部在 main 上；确认用不到后可以清掉（删除前按 V5/H5 先确认）。
+
 ## 环境
 
 - Godot：`GODOT=/path/to/godot` 优先；否则用 PATH 里的 4.3；都没有就自动下载到 `~/.cache/wendao-changsheng/`（Linux x86_64 / macOS）。Web 模板由 `tools/fetch_web_template.py` 用 HTTP Range 从官方 tpz 里只取 8MB（不下整包 1GB），只下载一次。
@@ -99,11 +112,10 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 
 ## 一次性设置
 
+可执行位已经提交进仓库（`6c373ec`），每个新副本只需要一行：
+
 ```bash
-chmod +x tools/verify.sh .githooks/pre-push
-git update-index --chmod=+x tools/verify.sh .githooks/pre-push   # 把可执行位提交进仓库（钩子文件必须可执行，git 才会运行它）
-git commit -m "chore: 钩子与验证脚本加可执行位"
-git config core.hooksPath .githooks                              # 以后每次 push 前自动跑 --fast
+git config core.hooksPath .githooks   # 以后每次 push 前自动跑 --fast
 ```
 
-发布前还要在 GitHub 仓库 **Settings → Pages → Build and deployment** 把 Source 设成 **Deploy from a branch**，分支选 `gh-pages`、目录选 `/ (root)`，只设一次。没设的话 `--deploy` 会推送成功，但第 7 步会超时，并提示去检查这个设置。
+Pages 来源已经是 `gh-pages` / `/ (root)`。如果以后被改回去，`--deploy` 仍会推送成功，但第 7 步会超时并提示检查这个设置；按上面「发布顺序」第 3 步的 `gh api` 命令切回来。
