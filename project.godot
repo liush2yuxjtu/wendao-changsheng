@@ -1,0 +1,29 @@
+; Engine configuration file.
+config_version=5
+
+[application]
+
+config/name="问道长生"
+config/description="水墨风挂机修仙小游戏"
+run/main_scene="res://scenes/Main.tscn"
+config/icon="res://icon.svg"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+GameState="*res://scripts/game_state.gd"
+
+[display]
+
+window/size/viewport_width=720
+window/size/viewport_height=1280
+window/size/window_width_override=450
+window/size/window_height_override=800
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=1
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
