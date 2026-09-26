@@ -18,7 +18,10 @@ fs.mkdirSync(outDir, { recursive: true });
   const ctx = await browser.newContext({ ...devices['iPhone 13'] });
   const page = await ctx.newPage();
   const errors = [];
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  // Emscripten 在 wasm 还没下载完时会用 console.error 打印「still waiting on run dependencies」，
+  // 只是慢网速下的等待提示，不是错误；真正加载失败会被下面的 90 秒超时抓到。
+  const BENIGN = /still waiting on run dependencies|^dependency: |^\(end of list\)$/;
+  page.on('console', m => { if (m.type() === 'error' && !BENIGN.test(m.text().trim())) errors.push(m.text()); });
   page.on('pageerror', e => errors.push(String(e)));
   page.on('requestfailed', r => errors.push(`请求失败 ${r.url()} ${r.failure()?.errorText}`));
 

@@ -87,6 +87,7 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 - `git stash` 之后如果后续命令失败，stash 会一直留着，工作区就成了旧版本。事后 `git stash list` 检查一下，并和远端比对。
 - 不要为了让 git 状态干净去删文件或 `reset --hard`。先确认文件在远端或历史里有同样的内容（`git show <commit>:<路径> | cmp - <文件>`），再恢复或删除。
 - 对 Godot 的输出要过滤：退出时的 `resources still in use` 和 `ObjectDB instances leaked` 属正常，其余 `ERROR` 都算失败，`verify.sh` 已经按这个规则处理。
+- 慢网速（比如 Mac 经代理）下，Emscripten 会在 wasm 还没下完时用 console.error 打印 `still waiting on run dependencies`。这是等待提示，`smoke_web.cjs` 已经把它列入白名单；真正加载不出来会被 90 秒超时抓到。拿不准时，在网速正常的机器上对线上地址再跑一次 `node tools/smoke_web.cjs <url>`。
 - 数值模拟有随机性（佛系玩法跑出过 4.9–8.1 小时）。只在接近区间边界时失败，重跑一次再下结论。
 
 ## 环境
