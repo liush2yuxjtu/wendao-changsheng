@@ -49,6 +49,11 @@ fs.mkdirSync(outDir, { recursive: true });
     // 依次点 6 个页签（功法 炼丹 历练 神通 法宝 宗门），确认切换不报错
     for (const x of [0.08, 0.17, 0.26, 0.35, 0.44, 0.53]) { await page.mouse.click(vp.width * x, vp.height * 0.415); await page.waitForTimeout(300); }
     await page.screenshot({ path: path.join(outDir, 'mobile-3.png') });
+    // 回到「历练」页点「外出历练」，打开俯视斗法台回放，再点底部「跳过」「离开/收下」关闭
+    await page.mouse.click(vp.width * 0.26, vp.height * 0.415); await page.waitForTimeout(400);
+    await page.mouse.click(vp.width * 0.265, vp.height * 0.522); await page.waitForTimeout(2500);
+    await page.screenshot({ path: path.join(outDir, 'mobile-4.png') });
+    for (let i = 0; i < 2; i++) { await page.mouse.click(vp.width * 0.65, vp.height * 0.955); await page.waitForTimeout(600); }
   } catch (e) {
     fail(String(e));
   }
@@ -56,5 +61,5 @@ fs.mkdirSync(outDir, { recursive: true });
 
   if (errors.length) fail('浏览器报错：\n  ' + errors.slice(0, 10).join('\n  '));
   if (failed) process.exit(1);
-  console.log(`✓ 冒烟测试通过（截图在 ${outDir}/mobile-{1,2,3}.png）`);
+  console.log(`✓ 冒烟测试通过（截图在 ${outDir}/mobile-{1,2,3,4}.png）`);
 })();

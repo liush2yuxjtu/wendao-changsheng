@@ -30,6 +30,8 @@ static func fight(a: Dictionary, b: Dictionary, rng: RandomNumberGenerator) -> D
 		"win": win, "rounds": rounds, "timeout": timeout,
 		"names": [f[0]["name"], f[1]["name"]],
 		"mhp": [f[0]["mhp"], f[1]["mhp"]],
+		"spd": [f[0]["spd"], f[1]["spd"]],
+		"skills": [_skill_ids(f[0]), _skill_ids(f[1])],
 		"events": ctx["ev"],
 	}
 
@@ -46,6 +48,13 @@ static func _prep(d: Dictionary) -> Dictionary:
 		"st": d.get("st", {}), "res": d.get("res", {}), "skills": sk,
 		"shield": 0.0, "stunned": false, "burn_t": 0, "burn_v": 0.0,
 	}
+
+
+static func _skill_ids(x: Dictionary) -> Array:
+	var ids := []
+	for sk in x["skills"]:
+		ids.append(sk["def"]["id"])
+	return ids
 
 
 static func _alive(x: Dictionary) -> bool:
