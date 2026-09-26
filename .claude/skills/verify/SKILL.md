@@ -37,6 +37,56 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 3. **失败**：按脚本给的修复提示改（缺字 → `python3 tools/make_font.py`；脚本错 → 修对应 `.gd`；数值超界 → 先问用户是不是故意调的节奏，是的话同步改 `verify.sh` 里的预期区间）。改完从头重跑，直到通过。不要为了通过去放宽检查，除非用户同意。
 4. 除非用户明确要求，不要用 `git push --no-verify` 跳过钩子。
 
+## Agent 操作手册：不在本机时怎么做
+
+这一节是实际做过一遍后的经验。你（agent）经常不在装好环境的本机上，而是在云端沙箱或远程 shell 里。先判断自己在哪，再按对应做法来。
+
+### 先弄清三件事
+
+| 要确认的 | 怎么查 | 决定了什么 |
+|---|---|---|
+| 能不能 `git push` | `git push --dry-run origin HEAD:main` | 能 → 正常提交推送；不能 → 走下面的「云端沙箱」做法，用 GitHub 工具提交 |
+| 能不能跑 Godot | `bash tools/verify.sh --fast` | 能 → 本机验证；不能 → 找能跑的机器（下面的「远程 shell」） |
+| 当前 Pages 来源 | 看 `version.txt` 是否存在：`curl -fsS https://liush2yuxjtu.github.io/wendao-changsheng/version.txt` | 404 说明还没从 `gh-pages` 发布过，`--deploy` 前要让用户切 Pages 来源 |
+
+### 云端沙箱（有 Godot，但不能 git push）
+
+- **验证**：照常 `bash tools/verify.sh`。沙箱里 Chromium 在 `/opt/pw-browsers/chromium`，要设 `CHROMIUM_PATH`。
+- **提交**：用 GitHub MCP 的 `push_files` 或 `create_or_update_file`，一次提交多个文本文件。推完之后，逐个比对远端 blob SHA（`get_file_contents` 列目录时带 `sha`）和本地 `git hash-object <文件>`，全部一致才算推成功。
+- **中文全角字符**（比如 `make_font.py` 里的全角空格 `　`）粘贴时容易丢，所以比对 SHA 这一步不能省。
+- **推完后同步本地**：`git fetch && git reset origin/main`，不带 `--hard`，只移动 HEAD，工作区文件不动。之后 `git status` 应该是空的。
+- **这条路做不到的事**：设置可执行位（MCP 只能写 100644）、推二进制文件、推 `gh-pages`。这些只能交给能 git push 的机器。
+
+### 远程 shell（比如用户的 Mac mini，经 executor-sh 连接）
+
+- **先摸底**：`uname -sm; which git gh node python3; gh auth status; df -h ~`。磁盘紧张时，别下完整的 1GB 模板包；`verify.sh` 已经改成按 Range 只取 8MB。
+- **单条命令最长 120 秒**。长任务用后台跑，再定时查看日志：
+  `nohup bash tools/verify.sh > ~/.cache/wendao-changsheng/verify.log 2>&1 &`
+  之后每隔 1–2 分钟 `cat` 一次日志，用 `pgrep -f tools/verify.sh` 判断是否跑完。
+- **把云端改动搬到远程**：`git diff --binary | gzip -9 | base64` 放进命令参数，在远程 `base64 -d | gunzip | git apply`，然后用 `git hash-object` 比对 SHA。
+- **可执行位只能在这里补**：`chmod +x …` 加 `git update-index --chmod=+x …`，然后提交。
+- **浏览器**：Mac 上可以直接用 `CHROMIUM_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`，Playwright 用 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm i --prefix ~/.cache/wendao-changsheng playwright` 装，不下浏览器。
+- **网络**：国内网络直连 github.com 可能超时，用户靠本机代理（Clash 等）上网。**不要**自己去读、设置或接管用户的代理（改脚本也不行），这会被安全策略拦下，也不该由 agent 决定。直接告诉用户，由他自己 `export https_proxy=…` 再跑，或者明确授权你这样做。
+
+### 发布顺序（第一次从 CI 切到 gh-pages 时）
+
+1. 本机或远程跑通 `bash tools/verify.sh`。
+2. 跑 `bash tools/verify.sh --deploy`，推出 `gh-pages` 分支。第 7 步会等线上版本号，这时来源还没切，会超时，属正常。
+3. 用户在 **Settings → Pages** 把来源切到 `gh-pages` / `/ (root)`。一定要在第 2 步之后切，否则网站会空白。
+4. 再跑一次 `--deploy`，线上版本号等于当前 commit、线上冒烟通过才算发布完成。
+
+### 改了验证本身时，要证明它能失败
+
+改 `verify.sh` 或检查规则后，在临时目录复制一份项目，故意制造 3 种错误，确认每种都让脚本退出码为 1：在 `.gd` 里加一个字体没有的字、加一行调用不存在函数的语法错误、把 `base_speed` 乘 0.3 让数值跑偏。改 `--deploy` 的话，用本地 bare 仓库当 origin，再起一个 `python3 -m http.server` 模拟 Pages，并设置 `PAGES_URL=http://127.0.0.1:<端口>/` 跑完整流程。
+
+### 踩过的坑
+
+- `pkill -f <模式>` 会连同自己所在的 shell 一起杀掉（命令行里也包含这个模式）。先 `pgrep` 拿到 PID，再按 PID 杀。
+- `git stash` 之后如果后续命令失败，stash 会一直留着，工作区就成了旧版本。事后 `git stash list` 检查一下，并和远端比对。
+- 不要为了让 git 状态干净去删文件或 `reset --hard`。先确认文件在远端或历史里有同样的内容（`git show <commit>:<路径> | cmp - <文件>`），再恢复或删除。
+- 对 Godot 的输出要过滤：退出时的 `resources still in use` 和 `ObjectDB instances leaked` 属正常，其余 `ERROR` 都算失败，`verify.sh` 已经按这个规则处理。
+- 数值模拟有随机性（佛系玩法跑出过 4.9–8.1 小时）。只在接近区间边界时失败，重跑一次再下结论。
+
 ## 环境
 
 - Godot：`GODOT=/path/to/godot` 优先；否则用 PATH 里的 4.3；都没有就自动下载到 `~/.cache/wendao-changsheng/`（Linux x86_64 / macOS）。Web 模板由 `tools/fetch_web_template.py` 用 HTTP Range 从官方 tpz 里只取 8MB（不下整包 1GB），只下载一次。
