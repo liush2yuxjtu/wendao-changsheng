@@ -39,7 +39,7 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 
 ## 环境
 
-- Godot：`GODOT=/path/to/godot` 优先；否则用 PATH 里的 4.3；都没有就自动下载到 `~/.cache/wendao-changsheng/`（Linux x86_64 / macOS）。Web 模板从官方 1GB 的 tpz 里只抽 8MB，只下载一次。
+- Godot：`GODOT=/path/to/godot` 优先；否则用 PATH 里的 4.3；都没有就自动下载到 `~/.cache/wendao-changsheng/`（Linux x86_64 / macOS）。Web 模板由 `tools/fetch_web_template.py` 用 HTTP Range 从官方 tpz 里只取 8MB（不下整包 1GB），只下载一次。
 - Python 3 + `fonttools`（`pip install fonttools`）。`--regen-assets` 还需要 `numpy`、`ffmpeg` 和系统 Noto Serif CJK 字体。
 - Node + Playwright：`npm i --prefix ~/.cache/wendao-changsheng playwright && npx --prefix ~/.cache/wendao-changsheng playwright install chromium`。已有 Chromium 的话设 `CHROMIUM_PATH`。
 - macOS 自带没有 `timeout`，可以 `brew install coreutils`；没有也能跑，只是第 2 步没有超时保护。

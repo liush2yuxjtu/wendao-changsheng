@@ -33,6 +33,9 @@ step() { printf '\n\033[1m▶ %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 die()  { printf '  \033[31m✗ %s\033[0m\n' "$*"; exit 1; }
 
+# 下载：HTTP/1.1 + 自动重试（Mac 上 GitHub 大文件走 HTTP/2 偶发 "HTTP2 framing layer" 中断）
+dl() { curl -fL --http1.1 --retry 5 --retry-delay 3 --retry-all-errors -sS -o "$2" "$1"; }
+
 # ---------- Godot ----------
 find_godot() {
   if [[ -n "${GODOT:-}" ]]; then echo "$GODOT"; return; fi
@@ -46,7 +49,7 @@ find_godot() {
       local bin="$CACHE/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
       if [[ ! -x "$bin" ]]; then
         echo "  下载 Godot ${GODOT_VERSION}（约 50MB，只下一次）…" >&2
-        curl -fsSL -o "$CACHE/godot.zip" "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+        dl "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" "$CACHE/godot.zip" || return 1
         unzip -qo "$CACHE/godot.zip" -d "$CACHE" && rm "$CACHE/godot.zip"
       fi
       echo "$bin" ;;
@@ -54,7 +57,7 @@ find_godot() {
       local bin="$CACHE/Godot.app/Contents/MacOS/Godot"
       if [[ ! -x "$bin" ]]; then
         echo "  下载 Godot ${GODOT_VERSION}（约 150MB，只下一次）…" >&2
-        curl -fsSL -o "$CACHE/godot.zip" "$base/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+        dl "$base/Godot_v${GODOT_VERSION}-stable_macos.universal.zip" "$CACHE/godot.zip" || return 1
         unzip -qo "$CACHE/godot.zip" -d "$CACHE" && rm "$CACHE/godot.zip"
       fi
       echo "$bin" ;;
@@ -69,12 +72,8 @@ ensure_web_template() {
     *)      dir="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/${GODOT_VERSION}.stable" ;;
   esac
   [[ -s "$dir/web_nothreads_release.zip" ]] && return
-  echo "  下载 Web 导出模板（官方 tpz 约 1GB，只取其中 8MB，只下一次）…"
-  mkdir -p "$dir"
-  local tpz="$CACHE/templates.tpz"
-  curl -fsSL -o "$tpz" "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-  unzip -qo -j "$tpz" templates/web_nothreads_release.zip templates/version.txt -d "$dir"
-  rm -f "$tpz"
+  echo "  下载 Web 导出模板（只按 Range 取官方 tpz 里的 8MB，不下整包 1GB）…"
+  python3 tools/fetch_web_template.py "$GODOT_VERSION" "$dir" | sed 's/^/  /' || die "导出模板下载失败"
 }
 
 # 过滤 Godot 退出时的无害泄漏提示，其余 ERROR / SCRIPT ERROR / Parse Error 都算失败
@@ -96,7 +95,7 @@ python3 tools/check_font.py 2>&1 | sed 's/^/  /' || die "字体缺字"
 
 # ---------- 2. 脚本 ----------
 step "2/5 脚本：导入并无界面运行主场景"
-G="$(find_godot)"
+G="$(find_godot)" && [[ -x "$G" ]] || die "准备 Godot ${GODOT_VERSION} 失败（下载或解压出错，见上方输出）；也可以设置 GODOT=/path/to/godot"
 "$G" --version | grep -q "^${GODOT_VERSION}\." || die "Godot 版本不是 ${GODOT_VERSION}：$("$G" --version)"
 out="$("$G" --headless --import 2>&1 || true)"
 errs="$(godot_errors <<<"$out")"; [[ -z "$errs" ]] || die "导入报错：
