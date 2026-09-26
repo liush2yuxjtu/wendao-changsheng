@@ -47,6 +47,31 @@ var adv_btn: Button
 var boss_btn: Button
 var auto_toggle: CheckBox
 var adv_label: Label
+var tower_label: Label
+var tower_btn: Button
+# 神通
+var scroll_label: Label
+var skill_rows := {}       # id -> {name, desc, learn, equip}
+var stat_label: RichTextLabel
+# 战斗回放
+var bt_layer: Control
+var bt_title: Label
+var bt_names: Array = []
+var bt_bars: Array = []
+var bt_hp_labels: Array = []
+var bt_status: Array = []
+var bt_arena: Control
+var bt_round: Label
+var bt_action: Label
+var bt_log: RichTextLabel
+var bt_speed_btn: Button
+var bt_skip_btn: Button
+var bt_result: RichTextLabel
+var _bt: Dictionary = {}
+var _bt_i := 0
+var _bt_t := 0.0
+var _bt_speed := 1.0
+var _bt_done := true
 # 法宝
 var equip_labels := {}
 var enhance_btns := {}
@@ -79,6 +104,7 @@ func _ready() -> void:
 	GameState.popup.connect(_on_popup)
 	GameState.changed.connect(_refresh)
 	GameState.sfx.connect(_on_sfx)
+	GameState.battle.connect(_on_battle)
 	GameState.start()
 	audio.muted = GameState.muted
 	for line in GameState.logs:
@@ -88,6 +114,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_battle_step(delta)
 	_refresh_t += delta
 	if _refresh_t >= 0.1:
 		_refresh_t = 0.0
@@ -168,10 +195,13 @@ func _build_ui() -> void:
 	# --- 分页 ---
 	var tabs := TabContainer.new()
 	tabs.custom_minimum_size = Vector2(0, 340)
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_stretch_ratio = 1.5
 	root.add_child(tabs)
 	_build_gongfa_tab(tabs)
 	_build_alchemy_tab(tabs)
 	_build_adventure_tab(tabs)
+	_build_skill_tab(tabs)
 	_build_equip_tab(tabs)
 	_build_sect_tab(tabs)
 
@@ -196,6 +226,8 @@ func _build_ui() -> void:
 	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	flash.color = Color(C_GOLD, 0.0)
 	fx_layer.add_child(flash)
+	_build_battle_layer()
+	move_child(bt_layer, fx_layer.get_index())   # 特效层在回放层之上
 
 	# --- 弹窗 ---
 	choice_dlg = ConfirmationDialog.new()
@@ -250,13 +282,57 @@ func _build_adventure_tab(tabs: TabContainer) -> void:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 12)
 	v.add_child(h)
-	adv_btn = _button(h, "外出历练", func(): GameState.adventure(false))
+	adv_btn = _button(h, "外出历练", func(): GameState.adventure(false, true))
 	adv_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	boss_btn = _button(h, "挑战妖王", func(): GameState.adventure(true))
+	boss_btn = _button(h, "挑战妖王", func(): GameState.adventure(true, true))
 	boss_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	auto_toggle = _check(v, "自动历练")
 	auto_toggle.toggled.connect(func(on: bool): GameState.auto_adventure = on)
 	adv_label = _wrap(_label(v, "", 19, C_SUB))
+	v.add_child(HSeparator.new())
+	tower_label = _wrap(_label(v, "", 21, C_INK))
+	tower_btn = _button(v, "", func(): GameState.tower_challenge())
+	_wrap(_label(v, "镇妖塔逐层挑战，首通得灵石；每 5 层镇塔妖王另得神通残卷×2，每 10 层得破境丹。", 19, C_SUB))
+
+
+func _build_skill_tab(tabs: TabContainer) -> void:
+	var v := _tab(tabs, "神通")
+	scroll_label = _wrap(_label(v, "", 21, C_INK))
+	for sk in GameData.SKILLS:
+		var id: String = sk["id"]
+		var box := VBoxContainer.new()
+		box.add_theme_constant_override("separation", 4)
+		v.add_child(box)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var nm := _label(row, "", 23, C_INK)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var eq := _button(row, "装备", func(): GameState.toggle_skill(id))
+		eq.custom_minimum_size = Vector2(96, 52)
+		eq.add_theme_font_size_override("font_size", 19)
+		var lb := _button(row, "", func(): _skill_action(id))
+		lb.custom_minimum_size = Vector2(230, 52)
+		lb.add_theme_font_size_override("font_size", 18)
+		var desc := _wrap(_label(box, "", 18, C_SUB))
+		skill_rows[id] = {"name": nm, "desc": desc, "learn": lb, "equip": eq}
+	v.add_child(HSeparator.new())
+	_label(v, "斗法属性", 23, C_RED)
+	stat_label = RichTextLabel.new()
+	stat_label.bbcode_enabled = true
+	stat_label.fit_content = true
+	stat_label.scroll_active = false
+	stat_label.add_theme_color_override("default_color", C_INK)
+	stat_label.add_theme_font_size_override("normal_font_size", 19)
+	v.add_child(stat_label)
+	_wrap(_label(v, "速度快者先出手。暴击伤害 ×1.5；连击再攻一次；受击时可能反击；击晕令对方跳过一回合；吸血按伤害回血。实际几率 = 己方属性 − 对方对应抗性。%d 回合未分胜负，挑战方判负。" % 20, 18, C_SUB))
+
+
+func _skill_action(id: String) -> void:
+	if GameState.skills.has(id):
+		GameState.upgrade_skill(id)
+	else:
+		GameState.learn_skill(id)
 
 
 func _build_equip_tab(tabs: TabContainer) -> void:
@@ -278,7 +354,7 @@ func _build_equip_tab(tabs: TabContainer) -> void:
 		b.custom_minimum_size = Vector2(210, 58)
 		b.add_theme_font_size_override("font_size", 19)
 		enhance_btns[slot] = b
-	_wrap(_label(v, "历练斩妖有几率掉落法宝（妖王更易出好货）。更好的自动装备，旧物自动分解为灵石。每级强化 +10% 该法宝效果。", 19, C_SUB))
+	_wrap(_label(v, "历练斩妖有几率掉落法宝（妖王更易出好货）。品质越高战斗词条越多（凡品 1 条…仙品 4 条）。更好的自动装备，旧物自动分解为灵石。每级强化 +10% 主效果、+5% 词条。", 19, C_SUB))
 
 
 func _build_sect_tab(tabs: TabContainer) -> void:
@@ -395,7 +471,49 @@ func _refresh() -> void:
 	adv_btn.disabled = cd > 0.0
 	boss_btn.disabled = cd > 0.0
 	auto_toggle.set_pressed_no_signal(gs.auto_adventure)
-	adv_label.text = ("调息中… %.1f 秒" % cd) if cd > 0.0 else "攻击 %s　气血 %s\n境界越高越容易取胜；妖王更强，掉落破境丹与好法宝。" % [GameData.fmt(gs.attack()), GameData.fmt(gs.max_hp())]
+	adv_label.text = ("调息中… %.1f 秒" % cd) if cd > 0.0 else "攻击 %s　防御 %s　气血 %s　速度 %d\n妖王更强且会施展神通，掉落破境丹、神通残卷与好法宝。" % [GameData.fmt(gs.attack()), GameData.fmt(gs.defense()), GameData.fmt(gs.max_hp()), int(gs.speed())]
+	var tm: Dictionary = GameData.tower_monster(gs.tower_floor + 1)
+	tower_label.text = "镇妖塔：已通 %d 层\n下一层守关：%s（战力约 %s）" % [gs.tower_floor, tm["name"], GameData.fmt(float(tm["atk"]) * 3.0 + float(tm["hp"]) * 0.5 + float(tm["def"]) * 2.0)]
+	tower_btn.text = "挑战第 %d 层" % (gs.tower_floor + 1)
+	tower_btn.disabled = cd > 0.0
+
+	# 神通
+	scroll_label.text = "神通残卷 %d　已装备 %d/%d（按装备顺序优先释放）" % [gs.scrolls, gs.skill_equip.size(), gs.skill_slots()]
+	for sk in GameData.SKILLS:
+		var id: String = sk["id"]
+		var row: Dictionary = skill_rows[id]
+		var learned: bool = gs.skills.has(id)
+		var locked: bool = gs.realm() < int(sk["realm"])
+		var lv: int = int(gs.skills.get(id, 1))
+		var eqd: bool = gs.skill_equip.has(id)
+		row["name"].text = ("%s　第%d层%s" % [sk["name"], lv, "　·已装备" if eqd else ""]) if learned else sk["name"]
+		row["name"].add_theme_color_override("font_color", C_RED if eqd else (C_SUB if locked else C_INK))
+		row["desc"].text = ("%s解锁　" % GameData.REALMS[int(sk["realm"])] if locked else "") + GameData.skill_desc(id, lv)
+		var lb: Button = row["learn"]
+		var eb: Button = row["equip"]
+		eb.visible = learned
+		eb.text = "卸下" if eqd else "装备"
+		eb.disabled = not eqd and gs.skill_equip.size() >= gs.skill_slots()
+		if not learned:
+			var c := GameData.skill_learn_cost(id)
+			lb.text = "习得 灵石%s" % GameData.fmt(c)
+			lb.disabled = locked or gs.lingshi < c
+		elif lv >= GameData.SKILL_MAX_LV:
+			lb.text = "已臻圆满"
+			lb.disabled = true
+		else:
+			var uc := GameData.skill_up_cost(id, lv)
+			lb.text = "升级 残卷%d 灵石%s" % [lv, GameData.fmt(uc)]
+			lb.disabled = gs.scrolls < lv or gs.lingshi < uc
+	var cs: Dictionary = gs.cstats()
+	var st := "攻击 %s　防御 %s　气血 %s　速度 %d\n" % [GameData.fmt(gs.attack()), GameData.fmt(gs.defense()), GameData.fmt(gs.max_hp()), int(gs.speed())]
+	var i := 0
+	for k in GameData.CSTATS:
+		st += "%s %.1f%%　[color=#6b5a48]抗%s %.1f%%[/color]" % [GameData.CSTAT_NAMES[k], float(cs[k]) * 100, GameData.CSTAT_NAMES[k], float(cs["res_" + k]) * 100]
+		i += 1
+		st += "\n" if i % 2 == 0 else "　　"
+	if stat_label.text != st:
+		stat_label.text = st
 
 	# 法宝
 	for slot in GameData.SLOTS:
@@ -403,7 +521,7 @@ func _refresh() -> void:
 		var enh: int = gs.enhance[slot]
 		var txt := "%s：%s" % [GameData.SLOT_NAMES[slot], GameData.item_label(it)]
 		if not it.is_empty():
-			txt += " +%d\n[color=#6b5a48]%s +%d%%[/color]" % [enh, GameData.SLOT_EFFECT[slot], roundi(gs.equip_bonus(slot) * 100)]
+			txt += " +%d\n[color=#6b5a48]%s +%d%%　%s[/color]" % [enh, GameData.SLOT_EFFECT[slot], roundi(gs.equip_bonus(slot) * 100), GameData.affix_text(it)]
 		if equip_labels[slot].text != txt:
 			equip_labels[slot].text = txt
 		var b: Button = enhance_btns[slot]
@@ -481,6 +599,286 @@ func _on_mute() -> void:
 	GameState.muted = not GameState.muted
 	audio.muted = GameState.muted
 	_refresh()
+
+
+# ======================= 战斗回放 =======================
+const C_HP_ME := Color("6f9a7a")
+const C_HP_FOE := Color("b0503c")
+const BT_STEP := 0.36   # ×1 时每条事件的间隔（秒）
+
+
+func _build_battle_layer() -> void:
+	bt_layer = Control.new()
+	bt_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bt_layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	bt_layer.visible = false
+	add_child(bt_layer)
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(C_INK, 0.55)
+	bt_layer.add_child(dim)
+	var m := MarginContainer.new()
+	m.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right"]:
+		m.add_theme_constant_override("margin_" + side, 28)
+	for side in ["top", "bottom"]:
+		m.add_theme_constant_override("margin_" + side, 90)
+	bt_layer.add_child(m)
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", _box(C_PAPER, 12, C_LINE, 22))
+	m.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	p.add_child(v)
+	bt_title = _label(v, "", 22, C_SUB)
+	bt_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# 上方敌人，下方自己
+	var foe := _fighter_box(v, 1)
+	bt_arena = Control.new()
+	bt_arena.custom_minimum_size = Vector2(0, 250)
+	bt_arena.clip_contents = true
+	v.add_child(bt_arena)
+	bt_round = _label(bt_arena, "", 30, C_LINE)
+	bt_round.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	bt_round.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bt_round.position.y = 74
+	bt_action = _label(bt_arena, "", 26, C_RED)
+	bt_action.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	bt_action.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bt_action.position.y = 116
+	var me := _fighter_box(v, 0)
+	v.move_child(foe, 1)
+	v.move_child(me, 3)
+	bt_log = RichTextLabel.new()
+	bt_log.bbcode_enabled = true
+	bt_log.scroll_following = true
+	bt_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bt_log.custom_minimum_size = Vector2(0, 150)
+	bt_log.add_theme_color_override("default_color", C_INK)
+	bt_log.add_theme_font_size_override("normal_font_size", 19)
+	v.add_child(bt_log)
+	bt_result = RichTextLabel.new()
+	bt_result.bbcode_enabled = true
+	bt_result.fit_content = true
+	bt_result.scroll_active = false
+	bt_result.add_theme_color_override("default_color", C_INK)
+	bt_result.add_theme_font_size_override("normal_font_size", 21)
+	bt_result.add_theme_font_size_override("bold_font_size", 40)
+	v.add_child(bt_result)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	v.add_child(h)
+	bt_speed_btn = _button(h, "", _on_bt_speed)
+	bt_speed_btn.custom_minimum_size = Vector2(150, 64)
+	bt_skip_btn = _button(h, "", _on_bt_skip)
+	bt_skip_btn.custom_minimum_size = Vector2(0, 64)
+	bt_skip_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+
+func _fighter_box(parent: Node, side: int) -> VBoxContainer:
+	var b := VBoxContainer.new()
+	b.add_theme_constant_override("separation", 4)
+	parent.add_child(b)
+	var row := HBoxContainer.new()
+	b.add_child(row)
+	var nm := _label(row, "", 26, C_HP_FOE if side == 1 else C_INK)
+	nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var stt := _label(row, "", 19, C_SUB)
+	var bar := ProgressBar.new()
+	bar.custom_minimum_size = Vector2(0, 30)
+	bar.show_percentage = false
+	bar.add_theme_stylebox_override("fill", _box(C_HP_FOE if side == 1 else C_HP_ME, 8, Color.TRANSPARENT, 0))
+	b.add_child(bar)
+	var hl := _label(bar, "", 18, C_INK)
+	hl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	while bt_names.size() < 2:
+		bt_names.append(null)
+		bt_bars.append(null)
+		bt_hp_labels.append(null)
+		bt_status.append(null)
+	bt_names[side] = nm
+	bt_bars[side] = bar
+	bt_hp_labels[side] = hl
+	bt_status[side] = stt
+	return b
+
+
+func _on_battle(rec: Dictionary) -> void:
+	_bt = rec
+	_bt_i = 0
+	_bt_t = 0.0
+	_bt_done = false
+	bt_title.text = rec.get("title", "")
+	for s in 2:
+		bt_names[s].text = rec["names"][s]
+		bt_bars[s].max_value = rec["mhp"][s]
+		bt_status[s].text = ""
+		_bt_set_hp(s, rec["mhp"][s], 0.0)
+	bt_round.text = ""
+	bt_action.text = ""
+	bt_log.clear()
+	bt_result.text = ""
+	bt_result.visible = false
+	bt_speed_btn.visible = true
+	bt_speed_btn.text = "×%d" % int(_bt_speed)
+	bt_skip_btn.text = "跳过"
+	bt_layer.visible = true
+	for c in bt_arena.get_children():
+		if c != bt_round and c != bt_action:
+			c.queue_free()
+
+
+func _bt_set_hp(s: int, hp: float, sh: float) -> void:
+	bt_bars[s].value = hp
+	bt_hp_labels[s].text = "%s / %s%s" % [GameData.fmt(hp), GameData.fmt(bt_bars[s].max_value), ("　盾 %s" % GameData.fmt(sh)) if sh > 0.0 else ""]
+
+
+func _battle_step(delta: float) -> void:
+	if _bt_done or not bt_layer.visible:
+		return
+	_bt_t -= delta * _bt_speed
+	while _bt_t <= 0.0 and not _bt_done:
+		var evs: Array = _bt["events"]
+		if _bt_i >= evs.size():
+			_bt_finish()
+			return
+		var e: Dictionary = evs[_bt_i]
+		_bt_i += 1
+		_bt_show(e, true)
+		_bt_t += BT_STEP * (0.5 if e["k"] == "round" or e["k"] == "burning" else 1.0)
+
+
+func _bt_show(e: Dictionary, animate: bool) -> void:
+	var names: Array = _bt["names"]
+	var s: int = e["s"]
+	var k: String = e["k"]
+	var v: float = e["v"]
+	var tag: String = e["tag"]
+	for i in 2:
+		_bt_set_hp(i, e["hp"][i], e["sh"][i])
+	var actor: String = names[s] if s >= 0 else ""
+	var target: String = names[1 - s] if s >= 0 else ""
+	var line := ""
+	match k:
+		"round":
+			bt_round.text = "第 %d 回合" % int(v)
+			line = "[color=#8c6d4f]—— 第 %d 回合 ——[/color]" % int(v)
+		"cast":
+			bt_action.text = "%s施展【%s】" % [actor, tag]
+			line = "%s施展[color=#a83a2a]【%s】[/color]" % [actor, tag]
+			if animate:
+				audio.play_sfx("event")
+		"hit":
+			var crit := tag.begins_with("暴击")
+			var how := tag.trim_prefix("暴击").trim_prefix("·")
+			var crit_txt := "[color=#b08a2a]暴击！[/color]" if crit else ""
+			if how == "":
+				line = "%s攻击，%s%s受到 [b]%s[/b] 伤害" % [actor, crit_txt, target, GameData.fmt(v)]
+			elif how == "连击" or how == "反击":
+				line = "%s%s，%s%s受到 [b]%s[/b] 伤害" % [actor, how, crit_txt, target, GameData.fmt(v)]
+			else:
+				line = "【%s】命中%s，%s造成 [b]%s[/b] 伤害" % [how, target, crit_txt, GameData.fmt(v)]
+			if animate:
+				_bt_float(1 - s, ("%s -%s" % [tag, GameData.fmt(v)]) if tag != "" else "-" + GameData.fmt(v), C_GOLD.darkened(0.2) if crit else C_HP_FOE, 40 if crit else 30)
+				_bt_shake(1 - s, 14.0 if crit else 6.0)
+				audio.play_sfx("tap")
+		"dodge":
+			line = "%s闪身避开了%s的%s" % [target, actor, tag if tag != "" else "攻击"]
+			if animate:
+				_bt_float(1 - s, "闪避", C_SUB, 30)
+		"heal":
+			line = "%s%s，回复 [color=#3f7a52]%s[/color] 气血" % [actor, "吸血" if tag == "吸血" else "运转" + tag, GameData.fmt(v)]
+			if animate:
+				_bt_float(s, "+" + GameData.fmt(v), C_HP_ME.darkened(0.2), 30)
+		"shield":
+			line = "%s施展【%s】，护盾 %s" % [actor, tag, GameData.fmt(v)]
+			bt_action.text = "%s施展【%s】" % [actor, tag]
+			if animate:
+				_bt_float(s, "护盾 " + GameData.fmt(v), Color("3a5a9a"), 30)
+		"stun":
+			line = "%s被击晕了！" % target
+			bt_status[1 - s].text = "眩晕"
+			if animate:
+				_bt_float(1 - s, "眩晕", C_RED, 34)
+		"stunned":
+			line = "%s头晕目眩，无法行动" % actor
+			bt_status[s].text = ""
+		"burning":
+			line = "%s身陷烈焰" % target
+			bt_status[1 - s].text = "灼烧"
+		"burn":
+			line = "%s被灼烧，损失 %s 气血" % [actor, GameData.fmt(v)]
+			if animate:
+				_bt_float(s, "灼烧 -" + GameData.fmt(v), Color("c0602a"), 26)
+	if line != "":
+		bt_log.append_text(line + "\n")
+
+
+func _bt_float(side: int, text: String, color: Color, size: int) -> void:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_outline_color", C_PAPER)
+	l.add_theme_constant_override("outline_size", 6)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bt_arena.add_child(l)
+	var w := bt_arena.size.x
+	# 敌方飘字在竞技区上沿、己方在下沿，避开中间的回合数与神通名
+	var y0 := 0.0 if side == 1 else bt_arena.size.y - 44.0
+	l.position = Vector2(w * 0.5 - 90 + randf_range(-130, 130), y0)
+	var dy := 22.0 if side == 1 else -22.0
+	var tw := l.create_tween().set_parallel()
+	tw.tween_property(l, "position:y", y0 + dy, 0.7 / _bt_speed)
+	tw.tween_property(l, "modulate:a", 0.0, 0.7 / _bt_speed).set_delay(0.35 / _bt_speed)
+	tw.chain().tween_callback(l.queue_free)
+
+
+func _bt_shake(side: int, amp: float) -> void:
+	var bar: Control = bt_bars[side]
+	var tw := bar.create_tween()
+	for i in 4:
+		tw.tween_property(bar, "position:x", randf_range(-amp, amp), 0.03)
+	tw.tween_property(bar, "position:x", 0.0, 0.03)
+
+
+func _bt_finish() -> void:
+	_bt_done = true
+	var win: bool = _bt["win"]
+	var hp: Array = _bt["events"][-1]["hp"] if not _bt["events"].is_empty() else _bt["mhp"]
+	for i in 2:
+		_bt_set_hp(i, hp[i], 0.0)
+	bt_status[0].text = ""
+	bt_status[1].text = ""
+	bt_action.text = ""
+	bt_result.visible = true
+	var head := "[center][b][color=#a83a2a]胜[/color][/b][/center]" if win else "[center][b][color=#6b5a48]败[/color][/b][/center]"
+	bt_result.text = "%s\n[center]%d 回合　%s[/center]" % [head, int(_bt["rounds"]), _bt.get("reward", "")]
+	bt_speed_btn.visible = false
+	bt_skip_btn.text = "收下" if win else "离开"
+	audio.play_sfx("win" if win else "lose")
+	if win:
+		_burst(24, 0.15)
+	else:
+		_flash(C_RED, 0.2)
+
+
+func _on_bt_speed() -> void:
+	_bt_speed = 2.0 if _bt_speed < 2.0 else (4.0 if _bt_speed < 4.0 else 1.0)
+	bt_speed_btn.text = "×%d" % int(_bt_speed)
+
+
+func _on_bt_skip() -> void:
+	if _bt_done:
+		bt_layer.visible = false
+		return
+	var evs: Array = _bt["events"]
+	while _bt_i < evs.size():
+		_bt_show(evs[_bt_i], false)
+		_bt_i += 1
+	_bt_finish()
 
 
 # ======================= 特效 =======================
