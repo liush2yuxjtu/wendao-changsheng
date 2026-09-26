@@ -21,7 +21,7 @@
 | 转世 | 飞升后转世永久 +50%；坐化转世 +10% |
 | 离线 | 最多结算 8 小时 |
 
-节奏（`tools/sim_balance.gd` 模拟）：全勤操作约 2 小时首次飞升；佛系挂机约 6–9 小时。
+节奏（`tools/sim_balance.gd` 模拟）：全勤操作约 2 小时首次飞升；佛系挂机约 5–9 小时（有随机性；`tools/verify.sh` 会检查是否在合理区间）。
 
 ## 本地运行
 1. 安装 Godot **4.3+**（标准版）。
@@ -35,17 +35,24 @@
 | `scripts/main.gd` | UI（纯代码搭建）、主题、特效 |
 | `scripts/ink_background.gd` | 程序绘制的水墨山水背景 |
 | `scripts/audio_manager.gd` | 生成式古琴背景乐 + 音效 |
-| `assets/audio/` | 由 `tools/make_audio.py` 合成的音频（首次 CI 运行时自动生成并提交） |
+| `assets/audio/` | 由 `tools/make_audio.py` 合成的音频 |
 | `assets/fonts/` | 裁剪后的 Noto Serif SC（OFL 授权，见 `NOTO-LICENSE.txt`） |
-| `tools/` | 数值模拟、音频合成、字体裁剪脚本 |
+| `tools/` | 验证与发布（`verify.sh`）、字体覆盖检查、手机冒烟测试、数值模拟、音频合成、字体裁剪 |
+| `.claude/skills/verify/` | `/verify` 技能：让 agent 按同一流程验证与发布 |
 
 **改了中文文案后**要重新裁剪字体，否则新字在网页/手机上会显示成方块：
 ```bash
 python3 tools/make_font.py      # 需要 fonttools 和 Noto Serif CJK
 ```
 
-## 部署
-推送到 `main` 后，GitHub Actions 会自动导出网页版（单线程版本，不需要跨域隔离响应头）并发布到 GitHub Pages。
+## 验证与部署（没有 CI，全部在本地做）
+```bash
+bash tools/verify.sh            # 资源/字体覆盖 → 无界面运行 → 数值模拟 → 网页导出 → 手机冒烟
+bash tools/verify.sh --fast     # 前三项，几秒钟（pre-push 钩子跑的就是它）
+bash tools/verify.sh --deploy   # 全部通过后发布到 GitHub Pages（gh-pages 分支），并验证线上版
+git config core.hooksPath .githooks   # 一次性：每次 push 前自动跑 --fast
+```
+用 Claude Code 的话直接 `/verify`。细节和环境要求见 `.claude/skills/verify/SKILL.md`。
 
 ## 授权
 代码与生成的音频：MIT。字体：Noto Serif CJK SC，SIL Open Font License 1.1。

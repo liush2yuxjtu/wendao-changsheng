@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 推送前自动跑快速验证（资源、字体覆盖、脚本、数值），几秒钟。
+# 启用：git config core.hooksPath .githooks
+# 紧急跳过：git push --no-verify
+exec bash "$(git rev-parse --show-toplevel)/tools/verify.sh" --fast
