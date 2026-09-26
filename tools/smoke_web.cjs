@@ -46,8 +46,8 @@ fs.mkdirSync(outDir, { recursive: true });
     // 点「吐纳」按钮（左侧大按钮，约在屏幕 20% 宽、32% 高处）
     const vp = page.viewportSize();
     for (let i = 0; i < 5; i++) { await page.mouse.click(vp.width * 0.2, vp.height * 0.32); await page.waitForTimeout(150); }
-    // 依次点 5 个页签，确认切换不报错
-    for (const x of [0.08, 0.17, 0.26, 0.35, 0.44]) { await page.mouse.click(vp.width * x, vp.height * 0.415); await page.waitForTimeout(300); }
+    // 依次点 6 个页签（功法 炼丹 历练 神通 法宝 宗门），确认切换不报错
+    for (const x of [0.08, 0.17, 0.26, 0.35, 0.44, 0.53]) { await page.mouse.click(vp.width * x, vp.height * 0.415); await page.waitForTimeout(300); }
     await page.screenshot({ path: path.join(outDir, 'mobile-3.png') });
   } catch (e) {
     fail(String(e));

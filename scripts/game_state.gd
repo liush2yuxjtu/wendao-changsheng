@@ -2,11 +2,13 @@ extends Node
 ## 全局游戏状态（Autoload: GameState）。纯逻辑，不碰 UI。
 
 const GameData := preload("res://scripts/game_data.gd")
+const Combat := preload("res://scripts/combat.gd")
 
 signal changed
 signal logged(line: String)
 signal choice_event(id: String, text: String)
 signal popup(title: String, text: String)
+signal battle(rec: Dictionary)   # 手动发起的战斗：界面据此回放
 signal sfx(name: String)   # tap / break_ok / break_major / break_fail / event / win / lose / item / craft / death
 
 const SAVE_PATH := "user://save.json"
@@ -37,6 +39,11 @@ var sect_task_cd := 0.0
 # ---- 装备 ----
 var equip := {"weapon": {}, "armor": {}, "trinket": {}}
 var enhance := {"weapon": 0, "armor": 0, "trinket": 0}
+# ---- 神通 / 镇妖塔 ----
+var skills := {}             # 神通 id -> 等级
+var skill_equip: Array = []  # 已装备的神通 id（按释放优先级）
+var scrolls := 0             # 神通残卷
+var tower_floor := 0         # 镇妖塔已通关层数
 # ---- 设置 ----
 var zone := 0
 var auto_adventure := false
@@ -146,8 +153,55 @@ func attack() -> float:
 func max_hp() -> float:
 	return 100.0 * pow(1.42, level) * (1.0 + 0.05 * gongfa) * (1.0 + equip_bonus("armor"))
 
+func defense() -> float:
+	return 4.0 * pow(1.42, level) * (1.0 + 0.05 * gongfa) * (1.0 + equip_bonus("armor"))
+
+func speed() -> float:
+	return 10.0 + 2.0 * level + (3.0 if sect == "mystic" else 0.0)
+
+## 六维战斗属性与抗性，键为 crit… 与 res_crit…
+func cstats() -> Dictionary:
+	var d := {}
+	var r := realm()
+	for k in GameData.CSTATS:
+		d[k] = float(GameData.CSTAT_BASE[k]) + (0.005 if k == "steal" else 0.01) * r
+		d["res_" + k] = 0.01 * r + 0.004 * gongfa
+	var add: Dictionary = GameData.SECT_CSTAT.get(sect, {})
+	for k in add:
+		d[k] = float(d[k]) + float(add[k])
+	for slot in GameData.SLOTS:
+		var aff: Dictionary = equip[slot].get("aff", {})
+		for k in aff:
+			if d.has(k):
+				d[k] = float(d[k]) + float(aff[k]) * (1.0 + 0.05 * int(enhance[slot]))
+	return d
+
+func fighter() -> Dictionary:
+	var cs := cstats()
+	var st := {}
+	var res := {}
+	for k in GameData.CSTATS:
+		st[k] = cs[k]
+		res[k] = cs["res_" + k]
+	var sk := []
+	for id in skill_equip:
+		if skills.has(id):
+			sk.append({"id": id, "lv": int(skills[id])})
+	return {"name": "你", "atk": attack(), "hp": max_hp(), "def": defense(), "spd": speed(), "st": st, "res": res, "skills": sk}
+
 func power() -> float:
-	return attack() * 3.0 + max_hp() * 0.5
+	var p := attack() * 3.0 + max_hp() * 0.5 + defense() * 2.0
+	var cs := cstats()
+	var sum := 0.0
+	for k in cs:
+		sum += float(cs[k])
+	var sk := 0.0
+	for id in skill_equip:
+		sk += 0.08 * int(skills.get(id, 0))
+	return p * (1.0 + sum * 0.5 + sk)
+
+func skill_slots() -> int:
+	return GameData.skill_slots(realm())
 
 func lifespan() -> float:
 	var base: float = GameData.LIFESPAN[realm()] * (1.1 if sect == "mystic" else 1.0)
@@ -335,29 +389,20 @@ func craft_break_pill() -> void:
 
 
 # ---------------- 历练 ----------------
-func adventure(boss: bool) -> void:
+## show=true 时发出 battle 信号让界面回放（手动点击）；自动历练只写日志
+func adventure(boss: bool, show := false) -> void:
 	if adventure_cd > 0.0:
 		return
 	var r := mini(zone, realm())
 	var names: Array = GameData.MONSTERS[r]
-	var mname: String = GameData.BOSSES[r] if boss else names[rng.randi() % names.size()]
+	var idx := rng.randi() % names.size()
+	var mname: String = GameData.BOSSES[r] if boss else names[idx]
 	var mlv: float = r * 4 + (3.5 if boss else rng.randf_range(0.0, 2.5))
-	var m_atk := 9.0 * pow(1.42, mlv)
-	var m_hp := 95.0 * pow(1.42, mlv)
-	var p_atk := attack()
-	var p_hp := max_hp()
-	var rounds := 0
-	while rounds < 30 and p_hp > 0.0 and m_hp > 0.0:
-		rounds += 1
-		var dmg := p_atk * rng.randf_range(0.8, 1.2)
-		if rng.randf() < 0.12:
-			dmg *= 2.0
-		m_hp -= dmg
-		if m_hp <= 0.0:
-			break
-		p_hp -= m_atk * rng.randf_range(0.8, 1.2)
+	var rec := Combat.fight(fighter(), GameData.monster(r, mlv, idx, boss, mname), rng)
 	var place: String = GameData.ZONES[r]
-	if m_hp <= 0.0:
+	rec["title"] = "%s · %s" % [place, mname]
+	var rounds: int = rec["rounds"]
+	if rec["win"]:
 		var ls := 25.0 * pow(2.2, r) * rng.randf_range(0.8, 1.2) * (4.0 if boss else 1.0) * rebirth_mult() * (1.2 if sect == "sword" else 1.0)
 		var hb := rng.randi_range(4, 8) if boss else rng.randi_range(1, 3)
 		lingshi += ls
@@ -369,19 +414,101 @@ func adventure(boss: bool) -> void:
 		if boss and rng.randf() < 0.3:
 			pill_break += 1
 			extra += "、破境丹×1"
+		if rng.randf() < (0.6 if boss else 0.06):
+			scrolls += 1
+			extra += "、神通残卷×1"
 		if sect != "":
 			var c := (3.0 if boss else 1.0) * (r + 1)
 			contrib += c
 			contrib_total += c
-		add_log("你于%s遭遇[b]%s[/b]，激战%d回合将其斩杀。获灵石%s、灵草×%d%s。" % [place, mname, rounds, GameData.fmt(ls), hb, extra])
+		var reward := "灵石%s、灵草×%d%s" % [GameData.fmt(ls), hb, extra]
+		rec["reward"] = reward
+		add_log("你于%s遭遇[b]%s[/b]，激战%d回合将其斩杀。获%s。" % [place, mname, rounds, reward])
 		adventure_cd = 15.0 if boss else 5.0
-		sfx.emit("win")
+		if not show:
+			sfx.emit("win")
 		if rng.randf() < (0.6 if boss else 0.15):
 			_drop_item(r, boss)
 	else:
-		add_log("你于%s遭遇[b]%s[/b]，不敌，负伤遁走，需调息片刻。" % [place, mname])
+		var why := "久战不下" if rec["timeout"] else "不敌"
+		rec["reward"] = "%s，负伤遁走，需调息 20 秒。" % why
+		add_log("你于%s遭遇[b]%s[/b]，%s，负伤遁走，需调息片刻。" % [place, mname, why])
 		adventure_cd = 20.0
-		sfx.emit("lose")
+		if not show:
+			sfx.emit("lose")
+	if show:
+		battle.emit(rec)
+	changed.emit()
+
+
+# ---------------- 镇妖塔 ----------------
+func tower_challenge() -> void:
+	if adventure_cd > 0.0:
+		return
+	var fl := tower_floor + 1
+	var rec := Combat.fight(fighter(), GameData.tower_monster(fl), rng)
+	rec["title"] = "镇妖塔 · 第%d层" % fl
+	if rec["win"]:
+		tower_floor = fl
+		var ls := GameData.tower_reward(fl) * rebirth_mult()
+		lingshi += ls
+		var extra := ""
+		if fl % 5 == 0:
+			scrolls += 2
+			extra += "、神通残卷×2"
+		if fl % 10 == 0:
+			pill_break += 1
+			extra += "、破境丹×1"
+		rec["reward"] = "首通奖励：灵石%s%s" % [GameData.fmt(ls), extra]
+		add_log("你登上镇妖塔第%d层，斩%s。%s。" % [fl, rec["names"][1], rec["reward"]])
+		adventure_cd = 2.0
+	else:
+		rec["reward"] = "止步第%d层，调息 10 秒再战。" % fl
+		add_log("你闯镇妖塔第%d层失利，被%s逐出塔外。" % [fl, rec["names"][1]])
+		adventure_cd = 10.0
+	battle.emit(rec)
+	changed.emit()
+
+
+# ---------------- 神通 ----------------
+func learn_skill(id: String) -> void:
+	var sk := GameData.skill_def(id)
+	if sk.is_empty() or skills.has(id) or realm() < int(sk["realm"]):
+		return
+	var cost := GameData.skill_learn_cost(id)
+	if lingshi < cost:
+		return
+	lingshi -= cost
+	skills[id] = 1
+	if skill_equip.size() < skill_slots():
+		skill_equip.append(id)
+	add_log("你闭关参悟，习得神通「%s」。" % sk["name"])
+	sfx.emit("craft")
+	changed.emit()
+
+
+func upgrade_skill(id: String) -> void:
+	if not skills.has(id):
+		return
+	var lv := int(skills[id])
+	var cost := GameData.skill_up_cost(id, lv)
+	if lv >= GameData.SKILL_MAX_LV or scrolls < lv or lingshi < cost:
+		return
+	scrolls -= lv
+	lingshi -= cost
+	skills[id] = lv + 1
+	add_log("神通「%s」精进至第%d层。" % [GameData.skill_def(id)["name"], lv + 1])
+	sfx.emit("craft")
+	changed.emit()
+
+
+func toggle_skill(id: String) -> void:
+	if not skills.has(id):
+		return
+	if skill_equip.has(id):
+		skill_equip.erase(id)
+	elif skill_equip.size() < skill_slots():
+		skill_equip.append(id)
 	changed.emit()
 
 
@@ -399,21 +526,29 @@ func make_item(tier: int, boss: bool) -> Dictionary:
 			break
 	var bases: Array = GameData.ITEM_BASE[slot]
 	var iname: String = GameData.ITEM_PREFIX[tier] + bases[rng.randi() % bases.size()]
-	return {"slot": slot, "tier": tier, "q": q, "name": iname}
+	var keys := []
+	for k in GameData.CSTATS:
+		keys.append(k)
+		keys.append("res_" + k)
+	var aff := {}
+	for i in q + 1:
+		var k: String = keys[rng.randi() % keys.size()]
+		aff[k] = float(aff.get(k, 0.0)) + GameData.affix_value(tier, q) * rng.randf_range(0.8, 1.2)
+	return {"slot": slot, "tier": tier, "q": q, "name": iname, "aff": aff}
 
 
 func _drop_item(tier: int, boss: bool) -> void:
 	var item := make_item(tier, boss)
 	var slot: String = item["slot"]
 	var old: Dictionary = equip[slot]
-	if GameData.item_bonus(item) > GameData.item_bonus(old):
+	if GameData.item_score(item) > GameData.item_score(old):
 		equip[slot] = item
 		var note := ""
 		if not old.is_empty():
 			var ls := _salvage_value(old)
 			lingshi += ls
 			note = "，旧物%s分解得灵石%s" % [GameData.item_label(old), GameData.fmt(ls)]
-		add_log("获得法宝%s，已装备（%s +%d%%）%s。" % [GameData.item_label(item), GameData.SLOT_EFFECT[slot], roundi(GameData.item_bonus(item) * 100), note])
+		add_log("获得法宝%s，已装备（%s +%d%%，%s）%s。" % [GameData.item_label(item), GameData.SLOT_EFFECT[slot], roundi(GameData.item_bonus(item) * 100), GameData.affix_text(item), note])
 		sfx.emit("item")
 	else:
 		var ls2 := _salvage_value(item)
@@ -591,6 +726,10 @@ func _rebirth(bonus: float) -> void:
 	sect_task_cd = 0.0
 	equip = {"weapon": {}, "armor": {}, "trinket": {}}
 	enhance = {"weapon": 0, "armor": 0, "trinket": 0}
+	skills = {}
+	skill_equip = []
+	scrolls = 0
+	tower_floor = 0
 	_life_warned = false
 	add_log("[color=#a83a2a]第 %d 世[/color]：前尘如梦，唯道心不灭。永久加成 ×%.1f。" % [rebirths + 1, rebirth_mult()])
 	changed.emit()
@@ -609,12 +748,13 @@ func add_log(text: String) -> void:
 # ---------------- 存档 ----------------
 func to_dict() -> Dictionary:
 	return {
-		"v": 2, "level": level, "xp": xp, "lingshi": lingshi, "herbs": herbs,
+		"v": 3, "level": level, "xp": xp, "lingshi": lingshi, "herbs": herbs,
 		"pill_qi": pill_qi, "pill_break": pill_break, "gongfa": gongfa,
 		"rebirths": rebirths, "reb_bonus": reb_bonus, "year": year,
 		"age": age, "life_bonus": life_bonus, "zone": zone,
 		"sect": sect, "contrib": contrib, "contrib_total": contrib_total,
 		"equip": equip, "enhance": enhance,
+		"skills": skills, "skill_equip": skill_equip, "scrolls": scrolls, "tower_floor": tower_floor,
 		"auto_adventure": auto_adventure, "use_break_pills": use_break_pills, "auto_minor": auto_minor, "muted": muted,
 		"ascended": ascended, "logs": logs,
 		"last_time": Time.get_unix_time_from_system(),
@@ -657,6 +797,20 @@ func load_game() -> bool:
 	var en: Variant = d.get("enhance", {})
 	for slot in GameData.SLOTS:
 		enhance[slot] = int(en.get(slot, 0)) if en is Dictionary else 0
+	skills = {}
+	var sk: Variant = d.get("skills", {})
+	if sk is Dictionary:
+		for id in sk:
+			if not GameData.skill_def(str(id)).is_empty():
+				skills[str(id)] = clampi(int(sk[id]), 1, GameData.SKILL_MAX_LV)
+	skill_equip = []
+	var se: Variant = d.get("skill_equip", [])
+	if se is Array:
+		for id in se:
+			if skills.has(str(id)) and not skill_equip.has(str(id)) and skill_equip.size() < skill_slots():
+				skill_equip.append(str(id))
+	scrolls = int(d.get("scrolls", 0))
+	tower_floor = int(d.get("tower_floor", 0))
 	auto_adventure = bool(d.get("auto_adventure", false))
 	use_break_pills = bool(d.get("use_break_pills", true))
 	muted = bool(d.get("muted", false))

@@ -50,6 +50,37 @@ const QUALITY_COLOR := ["#6b5a48", "#3f7a52", "#3a5a9a", "#a83a2a"]
 const QUALITY_WEIGHT := [60, 28, 10, 2]
 const QUALITY_WEIGHT_BOSS := [15, 45, 30, 10]
 
+## ---- 战斗（一念逍遥式回合制）----
+## 六维战斗属性，各有对应抗性；实际生效 = 己方属性 − 对方抗性
+const CSTATS := ["crit", "combo", "counter", "dodge", "stun", "steal"]
+const CSTAT_NAMES := {"crit": "暴击", "combo": "连击", "counter": "反击", "dodge": "闪避", "stun": "击晕", "steal": "吸血"}
+const CSTAT_BASE := {"crit": 0.05, "combo": 0.03, "counter": 0.03, "dodge": 0.03, "stun": 0.02, "steal": 0.0}
+const SECT_CSTAT := {
+	"sword": {"crit": 0.05, "combo": 0.05},
+	"pill": {"steal": 0.06, "counter": 0.04},
+	"mystic": {"dodge": 0.05, "res_stun": 0.05},
+}
+## 妖物特性：同一地图三种妖物各擅一项
+const MONSTER_TRAIT := ["combo", "stun", "dodge", "counter", "steal", "crit"]
+
+## 神通：realm=解锁境界，cd=冷却回合，m/ml=倍率及每级成长
+## k: dmg 伤害 / heal 回复（气血低于 75% 才用）/ shield 护盾
+const SKILLS := [
+	{"id": "sword", "name": "御剑术", "realm": 0, "cd": 3, "k": "dmg", "m": 1.8, "ml": 0.15, "desc": "飞剑斩敌，造成 {m} 攻击伤害"},
+	{"id": "heal", "name": "回春诀", "realm": 0, "cd": 4, "k": "heal", "m": 0.18, "ml": 0.03, "desc": "气血低于七成时，回复 {m} 最大气血"},
+	{"id": "shield", "name": "金刚护体", "realm": 1, "cd": 5, "k": "shield", "m": 0.25, "ml": 0.04, "desc": "凝出护盾，吸收 {m} 最大气血的伤害"},
+	{"id": "thunder", "name": "掌心雷", "realm": 1, "cd": 4, "k": "dmg", "m": 1.5, "ml": 0.12, "stun": 0.35, "sl": 0.03, "desc": "造成 {m} 攻击伤害，{s} 几率击晕"},
+	{"id": "fire", "name": "烈焰焚天", "realm": 2, "cd": 5, "k": "dmg", "m": 1.2, "ml": 0.1, "burn": 0.35, "bl": 0.05, "desc": "造成 {m} 攻击伤害，并灼烧 3 回合（每回合 {b} 攻击）"},
+	{"id": "absorb", "name": "吸星大法", "realm": 3, "cd": 4, "k": "dmg", "m": 1.6, "ml": 0.12, "drain": 0.5, "desc": "造成 {m} 攻击伤害，并将一半伤害化为己用"},
+	{"id": "wanjian", "name": "万剑归宗", "realm": 4, "cd": 6, "k": "dmg", "m": 0.7, "ml": 0.07, "hits": 5, "desc": "万剑齐落，连斩 5 次，每次 {m} 攻击伤害"},
+	{"id": "tianlei", "name": "九天神雷", "realm": 6, "cd": 7, "k": "dmg", "m": 3.5, "ml": 0.3, "pen": 0.6, "desc": "引九天神雷，造成 {m} 攻击伤害，无视六成防御"},
+]
+const SKILL_MAX_LV := 10
+## 妖王所用神通（按地图）
+const BOSS_SKILL := ["sword", "thunder", "fire", "absorb", "wanjian", "fire", "absorb", "wanjian", "tianlei"]
+## 装备神通的格数：练气 1，筑基 2，金丹及以上 3
+const SKILL_SLOTS := [1, 2, 3]
+
 const GONGFA := ["引气诀", "青木长生功", "紫霞神功", "太虚剑经", "九转玄功", "大衍天书"]
 
 ## 自动奇遇：k = 类型，v = 修为/灵石按「秒产出」倍数计，灵草/丹药按个数
@@ -138,3 +169,103 @@ static func item_label(item: Dictionary) -> String:
 	if item.is_empty():
 		return "（空）"
 	return "[color=%s]%s·%s[/color]" % [QUALITY_COLOR[int(item["q"])], QUALITY[int(item["q"])], item["name"]]
+
+
+# ---------------- 战斗 ----------------
+static func skill_def(id: String) -> Dictionary:
+	for sk in SKILLS:
+		if sk["id"] == id:
+			return sk
+	return {}
+
+
+static func skill_mult(sk: Dictionary, lv: int) -> float:
+	return float(sk["m"]) + float(sk["ml"]) * (lv - 1)
+
+
+static func skill_desc(id: String, lv: int) -> String:
+	var sk := skill_def(id)
+	var d: String = sk["desc"]
+	d = d.replace("{m}", "%d%%" % roundi(skill_mult(sk, lv) * 100))
+	d = d.replace("{s}", "%d%%" % roundi((float(sk.get("stun", 0.0)) + float(sk.get("sl", 0.0)) * (lv - 1)) * 100))
+	d = d.replace("{b}", "%d%%" % roundi((float(sk.get("burn", 0.0)) + float(sk.get("bl", 0.0)) * (lv - 1)) * 100))
+	return d + "（冷却 %d 回合）" % int(sk["cd"])
+
+
+static func skill_learn_cost(id: String) -> float:
+	return 100.0 * pow(3.0, int(skill_def(id)["realm"]))
+
+
+static func skill_up_cost(id: String, lv: int) -> float:
+	return skill_learn_cost(id) * 0.5 * pow(1.6, lv)
+
+
+static func skill_slots(realm: int) -> int:
+	return SKILL_SLOTS[mini(realm, SKILL_SLOTS.size() - 1)]
+
+
+static func cstat_name(key: String) -> String:
+	if key.begins_with("res_"):
+		return "抗" + CSTAT_NAMES[key.substr(4)]
+	return CSTAT_NAMES[key]
+
+
+## 妖物：r=地图，mlv=等效等级，idx=妖物序号（决定特性），boss=妖王
+static func monster(r: int, mlv: float, idx: int, boss: bool, mname: String) -> Dictionary:
+	var st := {}
+	var res := {}
+	for k in CSTATS:
+		st[k] = 0.02 + 0.01 * r if k != "steal" else 0.0
+		res[k] = 0.01 * r
+	st["crit"] = 0.05 + 0.01 * r
+	var feat: String = MONSTER_TRAIT[(idx + r) % MONSTER_TRAIT.size()]
+	st[feat] = float(st[feat]) + 0.1 + 0.01 * r
+	var skills := []
+	if boss:
+		skills.append({"id": BOSS_SKILL[r], "lv": r + 1})
+		for k in CSTATS:
+			res[k] = float(res[k]) + 0.03
+	return {
+		"name": mname, "boss": boss,
+		"atk": 9.0 * pow(1.42, mlv), "hp": 95.0 * pow(1.42, mlv),
+		"def": 4.0 * pow(1.42, mlv), "spd": 9.0 + 2.0 * mlv,
+		"st": st, "res": res, "skills": skills, "trait": feat,
+	}
+
+
+## 镇妖塔第 f 层（从 1 开始）
+static func tower_monster(f: int) -> Dictionary:
+	var mlv := 0.9 * f
+	var r := mini(floori(mlv / 4.0), ZONES.size() - 1)
+	var guard := f % 5 == 0
+	var names: Array = MONSTERS[r]
+	var mname: String = ("镇塔·" + BOSSES[r]) if guard else ("塔中" + names[f % names.size()])
+	return monster(r, mlv + (0.5 if guard else 0.0), f, guard, mname)
+
+
+## 首通灵石 ≈ 同级历练 5 场，镇塔妖王层翻倍
+static func tower_reward(f: int) -> float:
+	return 125.0 * pow(2.2, 0.9 * f / 4.0) * (2.0 if f % 5 == 0 else 1.0)
+
+
+## 法宝战斗词条：凡品 1 条 … 仙品 4 条
+static func affix_value(tier: int, q: int) -> float:
+	return (0.01 + 0.004 * tier) * (1.0 + 0.5 * q)
+
+
+static func item_score(item: Dictionary) -> float:
+	if item.is_empty():
+		return 0.0
+	var s := item_bonus(item)
+	var aff: Dictionary = item.get("aff", {})
+	for k in aff:
+		s += float(aff[k]) * 0.5
+	return s
+
+
+static func affix_text(item: Dictionary) -> String:
+	var aff: Dictionary = item.get("aff", {})
+	var parts := []
+	for k in aff:
+		parts.append("%s+%.1f%%" % [cstat_name(k), float(aff[k]) * 100])
+	return " ".join(parts)
