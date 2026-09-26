@@ -13,6 +13,8 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SRC = os.environ.get("NOTO_TTC", "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc")
 DST = os.path.join(ROOT, "assets", "fonts", "NotoSerifSC-wendao.otf")
 
+os.makedirs(os.path.dirname(DST), exist_ok=True)
+
 chars = set(chr(c) for c in range(0x20, 0x7F))
 chars |= set("，。！？、：；“”‘’（）《》【】「」·…—～×％＋－　0123456789")
 for path in glob.glob(os.path.join(ROOT, "scripts", "*.gd")) + [os.path.join(ROOT, "project.godot")]:
