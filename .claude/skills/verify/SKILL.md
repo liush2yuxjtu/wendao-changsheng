@@ -81,7 +81,8 @@ description: 问道长生的全部测试与发布流程（本项目没有 CI）�
 
 ### 踩过的坑
 
-- 远程 shell 的一次调用如果超时或报错，它启动的后台进程可能被一起杀掉（跑 `--deploy` 时就是在推送那一刻被杀的）。启动长任务的那次调用要马上返回：`nohup bash tools/verify.sh --deploy > log 2>&1 < /dev/null & disown`，不要在同一次调用里 `sleep` 等它。等待和查看日志放到后面的调用里。
+- **macOS 自带 bash 是 3.2**（locale 常为空），会把紧跟在 `$var` 后面的中文字符当成变量名的一部分，比如 `$sha（` 会被读成一个不存在的变量；配合 `set -u`，脚本会在发布步骤无声退出。Linux 上新版 bash 不会出错，所以云端测不出来。一律写成 `${var}`；`verify.sh` 第 1 步已经会检查这一点。
+- 远程 shell 启动长任务时，那次调用要马上返回：`nohup bash tools/verify.sh --deploy > log 2>&1 < /dev/null & disown`，不要在同一次调用里 `sleep` 等它（调用会超时报错），等待和查看日志放到后面的调用里。
 - `pkill -f <模式>` 会连同自己所在的 shell 一起杀掉（命令行里也包含这个模式）。先 `pgrep` 拿到 PID，再按 PID 杀。
 - `git stash` 之后如果后续命令失败，stash 会一直留着，工作区就成了旧版本。事后 `git stash list` 检查一下，并和远端比对。
 - 不要为了让 git 状态干净去删文件或 `reset --hard`。先确认文件在远端或历史里有同样的内容（`git show <commit>:<路径> | cmp - <文件>`），再恢复或删除。

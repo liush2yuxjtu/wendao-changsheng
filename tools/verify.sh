@@ -90,6 +90,12 @@ for f in drone qin_00 qin_09 sfx_tap sfx_win sfx_death; do
   [[ -s "assets/audio/$f.ogg" ]] || die "缺音频 assets/audio/$f.ogg，运行：python3 tools/make_audio.py"
 done
 ok "资源齐全"
+# macOS 自带 bash 3.2 在非 UTF-8 locale 下会把紧跟在 $var 后的中文字节当成变量名的一部分，
+# 配合 set -u 会直接退出。要写成 ${var}。
+bad="$(LC_ALL=C grep -nE '[$][A-Za-z_][A-Za-z0-9_]*[^ -~]' tools/*.sh .githooks/* || true)"
+[[ -z "$bad" ]] || die "脚本里有 \$变量 紧跟非 ASCII 字符（macOS bash 3.2 会出错），改成 \${变量}：
+$bad"
+ok "shell 脚本兼容 macOS bash 3.2"
 python3 -c "import fontTools" 2>/dev/null || die "缺 fonttools：pip install fonttools"
 python3 tools/check_font.py 2>&1 | sed 's/^/  /' || die "字体缺字"
 
@@ -170,11 +176,11 @@ echo "$sha" > "$tmp/version.txt"   # 线上验证用：确认 CDN 上是这次�
   git add -A
   git -c user.name="$(git -C "$ROOT" config user.name || echo verify)" \
       -c user.email="$(git -C "$ROOT" config user.email || echo verify@localhost)" \
-      commit -qm "deploy: $sha（tools/verify.sh --deploy）"
+      commit -qm "deploy: ${sha}（tools/verify.sh --deploy）"
   git push -qf "$remote" gh-pages
 ) || die "推送 gh-pages 失败（见上方 git 输出；网络问题时检查代理，例如 export https_proxy=...）"
 rm -rf "$tmp"
-ok "已推送 gh-pages（源码 $sha）"
+ok "已推送 gh-pages（源码 ${sha}）"
 
 step "验证线上版：$PAGES_URL"
 live=""
@@ -182,7 +188,7 @@ for i in $(seq 1 40); do   # Pages 构建 + CDN 刷新，一般 1–3 分钟
   live="$(curl -fsS "${PAGES_URL}version.txt?t=$RANDOM" 2>/dev/null | tr -d '[:space:]' || true)"
   [[ "$live" == "$sha" ]] && break; sleep 15
 done
-[[ "$live" == "$sha" ]] || die "10 分钟内线上版本仍是「${live:-无}」而不是 $sha——检查仓库 Settings → Pages 来源是否为 gh-pages 分支 /(root)"
+[[ "$live" == "$sha" ]] || die "10 分钟内线上版本仍是「${live:-无}」而不是 ${sha}——检查仓库 Settings → Pages 来源是否为 gh-pages 分支 /(root)"
 ok "线上版本 = $sha"
 node tools/smoke_web.cjs "$PAGES_URL" build/verify/live 2>&1 | sed 's/^/  /' || die "线上冒烟失败"
 printf '\n\033[32m已发布并验证\033[0m：%s\n' "$PAGES_URL"
